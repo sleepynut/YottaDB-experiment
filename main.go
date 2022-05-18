@@ -7,7 +7,6 @@ import (
 
 	_ "github.com/mattn/go-oci8"
 	"github.com/sleepynut/YottaDB-experiment/model"
-	"github.com/sleepynut/YottaDB-experiment/util"
 )
 
 const dsn = `hr/oracle@127.0.0.1:1521/orcl`
@@ -31,21 +30,63 @@ func main() {
 	// else ping success
 	fmt.Println("Connected!!")
 
-	albums, err := albumsByArtist("John Coltrane")
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("Albums found: %v\n", albums)
+	// albums, err := albumsByArtist("John Coltrane")
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
+	// fmt.Printf("Albums found: %v\n", albums)
 
-	// Experiment
-	fname := "./rsc/account.csv"
-	// hs, colValues := model.Translate(fname, model.Account{})
-	hs, colValues := util.ToOracleFormat(fname, (model.Account{}).ColTransformation)
-	fmt.Println(util.InsertMany("account", hs, colValues, db))
+	// // create receiving channel
+	// c := make(chan string)
 
+	// // many inserts into account
+	// fname := "./rsc/account.csv"
+	// var astruct any = model.Account{}
+	// hs, colValues := util.ToOracleFormat(fname, (model.Account{}).ColTransformation)
+	// go util.InsertMany("account", hs, colValues, db, astruct, c)
+
+	// // many inserts into user
 	// fname = "./rsc/user.csv"
+	// astruct = model.User{}
 	// hs, colValues = util.ToOracleFormat(fname, (model.User{}).ColTransformation)
-	// fmt.Println(util.InsertMany("user", hs, colValues, db))
+	// go util.InsertMany("userInfo", hs, colValues, db, astruct, c)
+
+	// // wait for the return of sub routine
+	// fmt.Println(<-c)
+	// fmt.Println(<-c)
+
+	// {
+	// 	fmt.Println("INSIDE TEMP")
+	// 	acc := "1000000001"
+	// 	bal := "2000000"
+
+	// 	ctx, cancel := context.WithTimeout(context.Background(), 55*time.Second)
+
+	// 	defer cancel()
+
+	// 	time.Sleep(10 * time.Second)
+
+	// 	tx, err := db.BeginTx(ctx, nil)
+	// 	defer func() {
+	// 		if err != nil {
+	// 			fmt.Println("ANY ERROR: ", err.Error())
+	// 		}
+	// 		fmt.Println("getting here?")
+	// 		tx.Rollback()
+	// 	}()
+
+	// 	stmt := "UPDATE account set balance=:bal where accountID=:acc"
+	// 	_, err = tx.ExecContext(ctx, stmt, bal, acc)
+	// }
+
+	// ACID: atomic
+	// err = model.UpdateBalance("1000000001", -50000, db)
+	// err = model.MoveBalance("1000000001", "1000000007", 50000, db)
+	// if err != nil {
+	// 	fmt.Println("ERROR - main: ", err.Error())
+	// }
+
+	model.MakePrimaryAccount("1000000002", "1", db)
 
 }
 
@@ -77,8 +118,4 @@ func albumsByArtist(name string) ([]Album, error) {
 	}
 
 	return albums, nil
-}
-
-func testParser(value string, parser func(string) interface{}) interface{} {
-	return parser(value)
 }

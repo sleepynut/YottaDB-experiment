@@ -3,8 +3,11 @@ package model
 import "time"
 
 type Transaction struct {
-	UID           string
+	UUID          string
 	Status        string
+	Src           string
+	Dst           string
+	Amount        float64
 	CreatedDt     time.Time
 	LastUpdatedDt time.Time
 }

@@ -7,61 +7,87 @@ import (
 	"io"
 	"log"
 	"os"
+	"reflect"
 	"strings"
+	"time"
+
+	"github.com/sleepynut/YottaDB-experiment/model"
+	t "github.com/sleepynut/YottaDB-experiment/transformer"
 )
 
-type ColValue struct {
-	Value  string
-	Parser func(string) string
-}
+func InsertMany(tbName string, colNames []string,
+	colValues []map[string]t.ColValue, db *sql.DB,
+	target any, c chan string) {
+	// prepare to measure the function execution time
+	start := time.Now()
 
-func InsertMany(tbName string, colNames []string, colValues []map[string]ColValue, db *sql.DB) string {
-	stmt := "INSERT ALL\n"
+	stmt := `INSERT INTO %s (%s) VALUES (%s);`
+
+	// begin transaction to insert multiple rows
+	tx, err := db.Begin()
+	if err != nil {
+		log.Fatal("ERROR - begin transaction: ", err.Error())
+	}
+
+	// prepare column's name string
+	names := strings.Join(colNames, ",")
+
+	// prepare placeholder string
+	placeHolders := make([]string, len(colNames))
+
+	// formating placeholder in sql statement of the form :v.<fieldname>
+	for i, n := range colNames {
+		placeHolders[i] = fmt.Sprintf(":%s", n)
+	}
 
 	for i := 0; i < len(colValues); i++ {
-		cols := make([]string, len(colValues[i]))
 
-		for j, name := range colNames {
-			cols[j] = colValues[i][name].Parser(colValues[i][name].Value)
+		// transform map of column values into struct
+		structVal := rowToStruct(&target, colValues[i])
+
+		// prepare sql statement
+		stmt = fmt.Sprintf(`INSERT INTO %s (%s) VALUES (%s)`,
+			tbName, names, strings.Join(placeHolders, ","))
+		stmSQL, err := db.Prepare(stmt)
+		if err != nil {
+			tx.Rollback()
+			log.Fatal("ERROR - prepare INSERT: ", err.Error())
 		}
-		temp := fmt.Sprintf("\tINTO %s (%s) VALUES (%s)\n",
-			tbName, strings.Join(colNames, ","), strings.Join(cols, ","))
-		stmt += temp
+
+		// execute sql statement
+		var errExec error
+		switch v := structVal.Interface().(type) {
+		case model.Account:
+			_, errExec = stmSQL.Exec(&v.AccountID, &v.UserID, &v.AccType, &v.Balance,
+				&v.CreatedDt, &v.LastUpdatedDt, &v.IsPrimary)
+
+		case model.User:
+			_, errExec = stmSQL.Exec(&v.UserID, &v.Title, &v.FirstName, &v.LastName,
+				&v.TitleEN, &v.FirstNameEN, &v.LastNameEN, &v.Age, &v.Gender)
+
+		default:
+			log.Fatalf("ERROR - Unknow type of %T\n", v)
+		}
+
+		if errExec != nil {
+			tx.Rollback()
+			log.Fatal("ERROR - Exec INSERT: ", errExec.Error())
+		}
+
 	}
+	tx.Commit()
 
-	stmt += "SELECT * from dual;\n"
+	// measure the total function execution time
+	fmt.Printf("INSERTMANY(%s) - time taken: %s\n", tbName, time.Since(start).String())
 
-	// temp
-	stmt = `
-INSERT INTO account (accountID,userID,accType,balance,createdDt,lastUpdatedDt,isPrimary)
-SELECT '1000000001','1','SV',100000.00,TO_DATE('2020-04-30 14:04:05','yyyy-mm-dd hh24:mi:ss'),TO_DATE('2020-04-30 14:04:05','yyyy-mm-dd hh24:mi:ss'),1 from DUAL UNION ALL
-SELECT '1000000002','1','SV',1100000.00,TO_DATE('2020-04-30 14:04:05','yyyy-mm-dd hh24:mi:ss'),TO_DATE('2020-04-30 14:04:05','yyyy-mm-dd hh24:mi:ss'),0 from DUAL;`
-	// temp-end
-
-	stmtSQL, err := db.Prepare(stmt)
-	if err != nil {
-		log.Fatal("ERROR - exec PREPARE MANY: ", err.Error())
-	}
-
-	result, err := stmtSQL.Exec()
-	if err != nil {
-		log.Fatal("ERROR - exec INSERT STMT: ", err.Error())
-	}
-
-	fmt.Println(result)
-	return stmt
-}
-
-func Vanilla(s string) string     { return s }
-func SingleQuote(s string) string { return fmt.Sprintf("'%s'", s) }
-func ToDateTime(s string) string {
-	return fmt.Sprintf("TO_DATE('%s','yyyy-mm-dd hh24:mi:ss')", s)
+	// push result into channel
+	c <- stmt
 }
 
 func ToOracleFormat(fname string,
-	transform func(int, string, []string, map[string]ColValue)) ([]string, []map[string]ColValue) {
+	transform func(int, string, []string, map[string]t.ColValue)) ([]string, []map[string]t.ColValue) {
 
-	var rows []map[string]ColValue
+	var rows []map[string]t.ColValue
 
 	f, err := os.Open(fname)
 	if err != nil {
@@ -73,13 +99,16 @@ func ToOracleFormat(fname string,
 
 	// skip header
 	var header string
-	var hs []string
 	if header, err = reader.ReadString('\n'); err != nil {
 		log.Fatal("ERROR - empty file")
 	}
 
+	// remove trailing new line character
+	header = strings.TrimSuffix(header, "\n")
+	hs := strings.Split(header, ",")
+
 	for {
-		m := make(map[string]ColValue)
+		m := make(map[string]t.ColValue)
 
 		line, err := reader.ReadString('\n')
 		if err != nil {
@@ -94,13 +123,33 @@ func ToOracleFormat(fname string,
 		line = strings.TrimSuffix(line, "\n")
 		values := strings.Split(line, ",")
 
-		// remove trailing new line character
-		header = strings.TrimSuffix(header, "\n")
-		hs = strings.Split(header, ",")
 		for i, h := range hs {
 			transform(i, h, values, m)
 		}
 		rows = append(rows, m)
 	}
+
+	// return (header, row)
+	// header is of format <name>, <name>, ...
 	return hs, rows
+}
+
+func rowToStruct(aStruct *any, colValues map[string]t.ColValue) reflect.Value {
+	structType := reflect.TypeOf(*aStruct)
+	structValue := reflect.New(reflect.ValueOf(aStruct).Elem().Elem().Type()).Elem()
+
+	for i := 0; i < structType.NumField(); i++ {
+		name := structType.Field(i).Name
+
+		if _, ok := colValues[name]; !ok {
+			log.Fatalf("ERROR - reflect mismatch between target struct & given column value: %s NOT FOUND!", name)
+		}
+
+		value := colValues[name].Parser(colValues[name].Value)
+
+		// set value to structValue
+		structValue.Field(i).Set(reflect.ValueOf(value))
+	}
+
+	return structValue
 }
