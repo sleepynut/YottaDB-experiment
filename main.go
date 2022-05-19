@@ -86,7 +86,20 @@ func main() {
 	// 	fmt.Println("ERROR - main: ", err.Error())
 	// }
 
-	model.MakePrimaryAccount("1000000002", "1", db)
+	// ACID: consistency
+	// model.MakePrimaryAccount("1000000002", "1", db)
+
+	// ACID: Isolation
+	dstAccounts := []model.DstAccount{
+		{AccountID: "1000000002", Balance: 500},
+		{AccountID: "1000000003", Balance: 1000},
+		{AccountID: "1000000004", Balance: 500},
+	}
+
+	err = model.SplitBalances("1000000001", 2000, db, dstAccounts...)
+	if err != nil {
+		fmt.Println(err.Error())
+	}
 
 }
 

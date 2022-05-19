@@ -22,6 +22,11 @@ type Account struct {
 	IsPrimary     bool
 }
 
+type DstAccount struct {
+	AccountID string
+	Balance   float64
+}
+
 func (a Account) ColTransformation(i int, h string, values []string, m map[string]t.ColValue) {
 	switch i {
 	// case 0, 1, 2:
@@ -60,8 +65,9 @@ func UpdateBalance(id string, balance float64, tx *sql.Tx) error {
 	}
 
 	balance += acc.Balance
-	stmt = `UPDATE account set balance=:balance where accountId=:id`
-	result, err := tx.Exec(stmt, balance, id)
+	now := time.Now()
+	stmt = `UPDATE account set balance=:balance,lastUpdatedDt=:now where accountId=:id`
+	result, err := tx.Exec(stmt, balance, now, id)
 	if err != nil {
 		return fmt.Errorf("ERROR - updatedBalance(update): %s", err.Error())
 	}
@@ -104,6 +110,83 @@ func MoveBalance(src, dest string, balance float64, db *sql.DB) error {
 	}
 
 	if err = UpdateBalance(dest, balance, tx); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func MoveBalanceTx(src, dest string, balance float64, db *sql.DB, tx *sql.Tx) error {
+	if balance < 0 {
+		return errors.New("prohibit negative balance")
+	}
+
+	var err error
+	// defer func() {
+	// 	if err != nil {
+	// 		// tx logging failed movement
+	// 		TxLogging("CANCEL", src, dest, balance, db)
+	// 	} else {
+
+	// 		// tx logging success movement
+	// 		TxLogging("SUCCESS", src, dest, balance, db)
+
+	// 	}
+	// }()
+
+	if err = UpdateBalance(src, -balance, tx); err != nil {
+		if _, ok := err.(c.RecordNotFound); !ok {
+			return err
+		}
+	}
+
+	if err = UpdateBalance(dest, balance, tx); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func SplitBalances(src string, srcBalance float64, db *sql.DB, dstAccounts ...DstAccount) error {
+	if srcBalance < 0 {
+		return errors.New("prohibit negative balance")
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("ERROR - SplitBalances: Begin tx : %s", err.Error())
+	}
+
+	defer func() {
+		msg := "SUCCESS"
+		if err != nil {
+			tx.Rollback()
+			msg = "CANCEL"
+		}
+		tx.Commit()
+
+		// logging tx
+		// all or nothing
+		for _, dst := range dstAccounts {
+			TxLogging(msg, src, dst.AccountID, dst.Balance, db)
+		}
+
+	}()
+
+	var movedBalance float64
+	for _, dstAccount := range dstAccounts {
+		err = MoveBalanceTx(src, dstAccount.AccountID, dstAccount.Balance, db, tx)
+
+		if err != nil {
+			return fmt.Errorf("ERROR - SplitBalances: splitting: %s", err.Error())
+		}
+
+		movedBalance += dstAccount.Balance
+	}
+
+	if srcBalance != movedBalance {
+		err = fmt.Errorf("ERROR - SplitBalances: Mismatch balance movement: Expected %f, but got %f",
+			srcBalance, movedBalance)
 		return err
 	}
 
