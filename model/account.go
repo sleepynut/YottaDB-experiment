@@ -147,6 +147,29 @@ func MoveBalanceTx(src, dest string, balance float64, db *sql.DB, tx *sql.Tx) er
 	return nil
 }
 
+func MoveBalanceThenCancel(src, dst string, balance float64, db *sql.DB) error {
+	if balance < 0 {
+		return errors.New("prohibit negative balance")
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("ERROR - MoveBalanceThenCancel: Begin tx : %s", err.Error())
+	}
+
+	defer func() {
+		tx.Rollback()
+	}()
+
+	err = MoveBalanceTx(src, dst, balance, db, tx)
+
+	if err != nil {
+		return fmt.Errorf("ERROR - MoveBalanceThenCancel: moving: %s", err.Error())
+	}
+
+	return nil
+}
+
 func SplitBalances(src string, srcBalance float64, db *sql.DB, dstAccounts ...DstAccount) error {
 	if srcBalance < 0 {
 		return errors.New("prohibit negative balance")
